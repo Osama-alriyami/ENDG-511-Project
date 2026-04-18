@@ -1,3 +1,6 @@
+# This file defines the full pipeline:
+# YOLO detection → crop → classification → final decision
+# It combines detector + classifier heads together.
 from PIL import Image
 import torch
 
@@ -10,15 +13,24 @@ from utils import crop_box_from_image, get_crop_transform, compute_iou
 class FullInspectionPipeline:
     def __init__(self, device=DEVICE):
         self.device = device
+
+        # YOLO detector for finding components
         self.detector = YOLODetector(YOLO_MODEL_PATH, device=device)
+
+        # classification heads for each component
         self.head_manager = HeadManager(device=device)
+
+        # transform applied to cropped regions
         self.crop_tfm = get_crop_transform(IMG_SIZE)
 
         self.component_names = {"damper", "fitting", "insulator", "plate"}
         self.special_defect_names = {"nest"}
 
     def predict_image(self, image_path, det_conf=0.1, crop_pad=20, nest_iou_thresh=0.1):
+        # load image
         image = Image.open(image_path).convert("RGB")
+
+        # run YOLO detection
         detections = self.detector.predict(image_path, conf=det_conf)
 
         component_dets = []
@@ -34,15 +46,22 @@ class FullInspectionPipeline:
 
         outputs = []
 
+        # separate normal components and nest detections
         for det in component_dets:
             component = det["component"]
 
+             # skip if no classifier exists
             if component not in self.head_manager.models:
                 continue
 
-            crop = crop_box_from_image(image, det["bbox"], pad=crop_pad)
-            crop_tensor = self.crop_tfm(crop).unsqueeze(0).to(self.device)
 
+            # crop detected region    
+            crop = crop_box_from_image(image, det["bbox"], pad=crop_pad)
+
+            # convert to tensor
+            crop_tensor = self.crop_tfm(crop).unsqueeze(0).to(self.device)
+            
+            # run classifier
             cls_out = self.head_manager.predict(component, crop_tensor)
             classifier_label = cls_out["pred_class"].lower()
 
@@ -56,7 +75,7 @@ class FullInspectionPipeline:
                     matched_nest_conf = nest_det["det_conf"]
                     break
 
-            # OR rule
+             # if either detector OR classifier says "nest", final result = nest
             if detector_says_nest or classifier_label == "nest":
                 final_class = "nest"
                 final_conf = max(

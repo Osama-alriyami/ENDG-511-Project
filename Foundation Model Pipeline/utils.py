@@ -1,3 +1,5 @@
+# Utility functions used across the pipeline.
+
 from PIL import Image
 from torchvision import transforms
 
@@ -15,12 +17,15 @@ def crop_box_from_image(image, bbox, pad=0):
 
 
 def get_crop_transform(img_size=224):
+     # crops bounding box with optional padding
     return transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
     ])
 
 def compute_iou(box1, box2):
+    # computes overlap between two boxes
+    # used for matching nest detections
     x1, y1, x2, y2 = box1
     a1, b1, a2, b2 = box2
 

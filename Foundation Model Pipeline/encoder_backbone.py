@@ -1,3 +1,5 @@
+# Vision Transformer encoder used for feature extraction.
+# Based on MAE-style encoder (no decoder here).
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -80,6 +82,7 @@ class ViTEncoderOnly(nn.Module):
 
     def extract_global_feature(self, x):
         tokens = self.forward(x)
+        # return CLS token as global representation
         return tokens[:, 0, :]
 
 

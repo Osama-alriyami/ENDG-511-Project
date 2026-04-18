@@ -1,3 +1,7 @@
+# This script trains a classifier (task head) for each component.
+# It uses a pretrained encoder (ViT/MAE) and trains a small MLP on top.
+# Each component (damper, insulator, etc) gets its own classifier.
+
 import os
 import glob
 import json
@@ -13,11 +17,17 @@ from PIL import Image
 
 
 
-# SETTINGS
+# SETTINGS for training
+# Controls dataset paths, training params, and model behavior
 @dataclass
 class Settings:
+    # root folder containing all component datasets
     data_root: str = "taskhead_classfier_dataset"
+
+    # pretrained encoder checkpoint
     encoder_path: str = "checkpoints_more_img/encoder_only.pt"
+
+    # where trained classifiers will be saved
     save_root: str = "defect_classifiers_20epoch_4fine_tune"
 
     components: tuple = ("damper", "fitting", "insulator", "plate")
@@ -47,6 +57,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 #  FUNCTIONS
 def set_seed(seed_value=0):
+    # fixes randomness for reproducibility
     random.seed(seed_value)
     torch.manual_seed(seed_value)
     torch.cuda.manual_seed_all(seed_value)
@@ -64,12 +75,15 @@ def get_image_paths(folder):
 
 
 
-# DATASET
+
+# dataset for loading images per component
+# expects structure: root/class_name/image.jpg
 class ComponentDataset(Dataset):
     def __init__(self, root_folder, img_size=224):
         self.root_folder = root_folder
 
         self.class_names = sorted([
+            # find all class folders
             name for name in os.listdir(root_folder)
             if os.path.isdir(os.path.join(root_folder, name))
         ])
@@ -89,7 +103,7 @@ class ComponentDataset(Dataset):
 
         if len(self.samples) == 0:
             raise RuntimeError(f"No images found under: {root_folder}")
-
+        # basic augmentation to improve generalization
         self.transform = transforms.Compose([
             transforms.Resize((img_size, img_size)),
             transforms.RandomHorizontalFlip(p=0.5),
@@ -165,7 +179,8 @@ class TransformerBlock(nn.Module):
         x = x + self.mlp(self.norm2(x))
         return x
 
-
+# Vision Transformer encoder (same as used during pretraining)
+# used to extract features from images
 class ViTEncoder(nn.Module):
     def __init__(
         self,
@@ -215,7 +230,7 @@ class ViTEncoder(nn.Module):
 
 
 
-# TASK HEAD CLASSIFIER
+# small classifier head on top of encoder features
 class DefectHeadModel(nn.Module):
     def __init__(self, encoder, num_classes, hidden_dim=256, dropout=0.2):
         super().__init__()
@@ -228,13 +243,15 @@ class DefectHeadModel(nn.Module):
         )
 
     def forward(self, x):
+        # get features from encoder
         features = self.encoder.extract_global_feature(x)
+        # classify features
         logits = self.head(features)
         return logits
 
 
 
-# LOAD  ENCODER
+# loads pretrained encoder weights from checkpoint
 def load_encoder(encoder_path, device="cuda"):
     checkpoint = torch.load(encoder_path, map_location=device)
 
@@ -257,8 +274,10 @@ def load_encoder(encoder_path, device="cuda"):
 
 
 
-# FREEZE UNFREEZE ENCODER
+# controls which parts of encoder are trainable
+# used for fine-tuning
 def set_encoder_trainable(encoder, freeze_encoder=True, unfreeze_last_blocks=0):
+    # freeze everything first
     for param in encoder.parameters():
         param.requires_grad = False
 
@@ -266,7 +285,7 @@ def set_encoder_trainable(encoder, freeze_encoder=True, unfreeze_last_blocks=0):
         for param in encoder.parameters():
             param.requires_grad = True
         return
-
+    # optionally unfreeze last few transformer blocks
     if unfreeze_last_blocks > 0:
         for block in encoder.encoder_blocks[-unfreeze_last_blocks:]:
             for param in block.parameters():
@@ -278,7 +297,7 @@ def set_encoder_trainable(encoder, freeze_encoder=True, unfreeze_last_blocks=0):
 
 
 # IMBALANCE 
-
+# handles class imbalance using sampling
 def make_weighted_sampler(dataset):
     labels = [label for _, label in dataset.samples]
 
@@ -296,7 +315,7 @@ def make_weighted_sampler(dataset):
     )
     return sampler
 
-
+# alternative: use loss weighting instead of sampling
 def make_class_weights(dataset, device):
     labels = [label for _, label in dataset.samples]
     num_classes = len(dataset.class_names)
@@ -312,11 +331,11 @@ def make_class_weights(dataset, device):
 
 
 # EVAL
-
+# evaluates model on validation/test set
 @torch.no_grad()
 def evaluate_model(model, loader, num_classes):
     model.eval()
-
+     # build confusion matrix
     total = 0
     correct = 0
     confusion = torch.zeros(num_classes, num_classes, dtype=torch.int64)
@@ -337,7 +356,7 @@ def evaluate_model(model, loader, num_classes):
     accuracy = correct / total if total > 0 else 0.0
     return accuracy, confusion
 
-
+   
 def show_confusion_matrix(confusion, class_names):
     print("\nConfusion Matrix")
 
@@ -353,14 +372,14 @@ def show_confusion_matrix(confusion, class_names):
         print(row)
 
 
-# =========================================================
-# TRAIN ONE COMPONENT
-# =========================================================
+
+
+# trains classifier for one component
 def train_one_component(component_name):
     print("\n" + "=" * 80)
     print(f"Training classifier for: {component_name}")
     print("=" * 80)
-
+    # load train/test datasets
     train_folder = os.path.join(cfg.data_root, component_name, "train")
     test_folder = os.path.join(cfg.data_root, component_name, "test")
 
@@ -405,6 +424,7 @@ def train_one_component(component_name):
         num_workers=cfg.num_workers,
         pin_memory=True
     )
+        # load encoder and attach classifier head
 
     encoder = load_encoder(cfg.encoder_path, device=device)
     set_encoder_trainable(
@@ -425,7 +445,7 @@ def train_one_component(component_name):
         criterion = nn.CrossEntropyLoss(weight=class_weights)
     else:
         criterion = nn.CrossEntropyLoss()
-
+        # only train parameters that are not frozen
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
         trainable_params,
@@ -448,10 +468,12 @@ def train_one_component(component_name):
             labels = labels.to(device, non_blocking=True)
 
             optimizer.zero_grad()
-
+             # forward pass
             outputs = model(images)
+             # compute loss
             loss = criterion(outputs, labels)
-
+            
+             # backward + update
             loss.backward()
             optimizer.step()
 
@@ -472,11 +494,12 @@ def train_one_component(component_name):
             f"train_acc={train_acc:.4f} | "
             f"test_acc={test_acc:.4f}"
         )
-
+        # save model only if test accuracy improves
         if test_acc > best_test_acc:
             best_test_acc = test_acc
 
             model_save_path = os.path.join(cfg.save_root, f"{component_name}_classifier.pt")
+            
             torch.save(
                 {
                     "model": model.state_dict(),
@@ -512,7 +535,7 @@ def train_one_component(component_name):
 
 set_seed(cfg.seed)
 print(f"Using device: {device}")
-
+# train each component separately
 for component_name in cfg.components:
     try:
         train_one_component(component_name)

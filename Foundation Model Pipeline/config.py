@@ -1,10 +1,11 @@
+# Central place for all paths and settings used in the project.
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 YOLO_MODEL_PATH = BASE_DIR / "models" / "yolo" / "best.pt"
-ENCODER_PATH = BASE_DIR / "models" / "encoder" / "pruned_finetuned_encoder.pt"
-HEADS_DIR = BASE_DIR / "models" / "heads"
+ENCODER_PATH = BASE_DIR / "models" / "encoder" / "quantized_fp16_encoder.pt"
+HEADS_DIR = BASE_DIR / "models" / "heads" # All task heads should be in this folder with correct names
 
 DEVICE = "cuda"
 

@@ -1,3 +1,6 @@
+# Runs pipeline on a single image.
+# Saves annotated image + cropped detections.
+# Also measures inference time.
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import time
@@ -135,6 +138,8 @@ def time_pipeline(pipeline, image_path, det_conf=0.5, crop_pad=20, nest_iou_thre
     Measure only pipeline.predict_image() time.
     Keeps timing separate from drawing and saving.
     """
+
+     # warmup runs to stabilize GPU timing
     print(f"\nWarming up for {warmup_runs} runs...")
     for _ in range(warmup_runs):
         _ = pipeline.predict_image(
@@ -187,6 +192,7 @@ print(f"Crops dir   : {crops_dir}")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Device      : {device}")
 
+# create pipeline
 pipeline = FullInspectionPipeline(device=device)
 
 # More accurate timing
@@ -208,6 +214,7 @@ print(f"Max inference time    : {max_time:.2f} ms")
 sync_if_cuda(device)
 start_time = time.perf_counter()
 
+# run one final inference for saving results
 outputs = pipeline.predict_image(
     image_path=image_path,
     det_conf=0.5,

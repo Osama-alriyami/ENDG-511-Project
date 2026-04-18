@@ -1,12 +1,17 @@
+# Simple wrapper around YOLO model.
+# Converts YOLO output into clean dictionary format.
+
 from ultralytics import YOLO
 
 
 class YOLODetector:
     def __init__(self, model_path, device="cuda"):
+        # load YOLO model
         self.model = YOLO(str(model_path))
         self.device = device
 
     def predict(self, image_path, conf=0.25): # change conf later
+          # run YOLO inference
         results = self.model.predict(source=str(image_path), conf=conf, device=self.device, verbose=False)
 
         detections = []
@@ -19,7 +24,9 @@ class YOLODetector:
 
             for b in boxes:
                 xyxy = b.xyxy[0].cpu().numpy().tolist()
+                # class id → class name
                 cls_id = int(b.cls[0].item())
+                 # confidence score
                 det_conf = float(b.conf[0].item())
 
                 detections.append({
